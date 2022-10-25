@@ -108,25 +108,32 @@ const grnUpdateStatusHandler = async (req, res) => {
     const createdAt = new Date().toISOString().slice(0, 19).replace('T', ' ');
     const { id, status } = req.body
 
-    const updateStatusQuery = `UPDATE grn SET status = ${JSON.stringify(status)} WHERE id = ${id}`
     const getLineItemsQuery = `SELECT id, product_name, quantity, stock_price FROM grn_line_item WHERE grn_id=${id}`
-    const insertItemQuery = `INSERT INTO item (created_at, updated_at, product_name, quantity, stock_price) VALUES ?`
+    const updateStatusQuery = `UPDATE grn SET status = ${JSON.stringify(status)} WHERE id = ${id}`
+    const insertItemQuery = `INSERT INTO item (created_at, updated_at, product_name, quantity, stock_price) VALUES ? ON DUPLICATE KEY UPDATE quantity=quantity+VALUES(quantity);`
 
     await con.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
     await con.beginTransaction();
     try {
-        const items = await con.query(getLineItemsQuery).then(res => res[0])
+        const grnLineItems = await con.query(getLineItemsQuery).then(res => res[0])
 
-        const values = items.map((grnLineItem) => {
+
+        const values = grnLineItems.map((grnLineItem) => {
             const { product_name, quantity, stock_price } = grnLineItem
             return [createdAt, createdAt, product_name, quantity, stock_price]
         })
 
-        await con.query(updateStatusQuery)
-        await con.query(insertItemQuery, [values])
+        const updateStatusResult = await con.query(updateStatusQuery)
+        if (updateStatusResult[0].affectedRows === 0) {
+            throw `Error: Could not find any grn with id = ${id}`
+        }
+
+        if (grnLineItems.length > 0) {
+            await con.query(insertItemQuery, [values])
+        }
 
         await con.commit();
-        res.send(`Status updated to ${status} for grn with id=${id}`)
+        res.send(`Success: Status updated to ${status} for grn with id=${id}`)
     } catch (err) {
         con.rollback();
         res.send(err)
